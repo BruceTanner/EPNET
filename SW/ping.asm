@@ -110,7 +110,8 @@ OUR_ID		equ	4242h
 ;
 ; In:  vars.ping.ip contains IP address
 ; Out: Cy=>error occured
-init:		xor	a		; Always use socket 0
+init:
+		xor	a		; Always use socket 0
 		SOCKET_GET_BASE
 ;
 		; We have to set SnPROTOR to the IP protocol number

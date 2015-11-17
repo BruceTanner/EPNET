@@ -2009,7 +2009,8 @@ trace:		call	io.start
 ; This is the data kept in EXOS channel RAM.
 ;
 ; EXOS channel RAM is accessed at (ix-1), (ix-2)...etc so our data here is
-; accessed with (ix-1-<item>) eg (ix-1-socket)
+; accessed with (ix-1-<item>) eg (ix-1-socket). But it must be paged in first
+; - the segment in in L'.
 ;
 ; socket must be first as some of the generic device code expects it here.
 ;
@@ -2050,35 +2051,38 @@ device_create:
 		; Open and create are identical except for the FTP command
 		; string
 opencreate:
-		push	iy
-		 ld	iy,vars
 ;		
-		 ld	(vars.ftp.socket),a
-		 ld	(ix-1-ftp_channel.data),0; 0=>no data channel open
+		ld	(vars.ftp.socket),a
+		exx
+		out	(c),l		; Page in channel RAM
+		ld	(ix-1-ftp_channel.socket),a	; Save socket
+		ld	(ix-1-ftp_channel.data),0; 0=>no data channel open
+		out	(c),b		; Page our variables back in
+		exx
 ;
-		 call	status.start	; Start activity indicator
-
-		 push	hl		; Save FTP command
-		 push	de		; Save ->arg
-		  call	open_data	; Open data connection
-		 pop	de		; DE->arg
-		 pop	hl		; HL->FTP command
-		 ld	a,exos.ERR_NOCON
-		 jr	c,.ret
+		call	status.start	; Start activity indicator
 ;
-		 xor	a		; Data channel; socket always 0
-		 ld	(ix-1-ftp_channel.socket),a
-		 ld	(ix-1-ftp_channel.data),0xff;	; NZ=>data socket open
+		push	hl		; Save FTP command
+		push	de		; Save ->arg
+		 call	open_data	; Open data connection
+		pop	de		; DE->arg
+		pop	hl		; HL->FTP command
+		ld	a,exos.ERR_NOCON
+		jr	c,.ret
 ;
-		 call	issue_arg	; Send FTP command, HL=response code
-		 ld	a,exos.ERR_TIMEOUT
-		 jr	c,.ret
+		xor	a		; Data channel socket always 0
+		exx
+		out	(c),l		; Page in channel RAM
+		ld	(ix-1-ftp_channel.data),0xff;	; NZ=>data socket open
+		out	(c),b		; Page our variables back in
+		exx
 ;
-		 call	ftp_to_exos
-.ret:		 push	af
-	 	  call	status.stop	; Stop activity indicator
-		 pop	af
-		pop	iy
+		call	issue_arg	; Send FTP command, HL=response code
+		ld	a,exos.ERR_TIMEOUT
+		call	nc,ftp_to_exos
+.ret:		push	af
+	 	 call	status.stop	; Stop activity indicator
+		pop	af
 		ret
 ;
 ;
@@ -2092,25 +2096,27 @@ opencreate:
 ; Out: A=EXOS error code
 ;
 device_close:
-		push	iy
-		 ld	iy,vars
-;		
-		 ld	(vars.ftp.socket),a
+		ld	(vars.ftp.socket),a
 ;
-		 call	status.start	; Start activity indicator
+		call	status.start	; Start activity indicator
 
-		 xor	a
-		 bit	0,(ix-1-ftp_channel.data);
-		 call	nz,tcp.close	; Close data socket (socket = 0)
+		xor	a		; Socket 0
+		exx
+		out	(c),l		; Page in channel RAM
+		bit	0,(ix-1-ftp_channel.data);
+		out	(c),b		; Page our variables back in
+		exx
+		call	nz,tcp.close	; Close data socket (socket = 0)
 ;
-		 ld	(ix-1-ftp_channel.data),0; Not open now
+		exx
+		out	(c),l		; Page in channel RAM
+		ld	(ix-1-ftp_channel.data),0; Not open now
+		out	(c),b		; Page our variables back in
+		exx
 ;
-		 call	is_response	; Read any final reponse to RETR/STOR
-
-	 	 call	status.stop	; Stop activity indicator
-
-		 xor	a		; No error
-		pop	iy
+		call	is_response	; Read any final reponse to RETR/STOR
+	 	call	status.stop	; Stop activity indicator
+		xor	a		; No error
 		ret
 ;
 ;
@@ -2125,28 +2131,25 @@ device_close:
 ;       A=EXOS error code
 ;
 device_read_byte:
-		push	iy
-		 ld	iy,vars
 ;
-; POKE 'd'
-; POKE 'c'
- 
-		 ld	(vars.ftp.socket),a
+		ld	(vars.ftp.socket),a
 ;
-		 call	status.start		; Start activity indicator
+		call	status.start		; Start activity indicator
 ;
-		 ld	de,vars.device.byte	; 1 byte buffer
-		 ld	bc,1
-		 xor	a			; Socket 0 for data
-		 call	tcp.read_block		; Read 1 byte
-		 ld	b,(iy+vars.device._byte)	; Return 1 byte in B
-; POKE '='
-; POKEBYTE b
-		 push	af
-	 	  call	status.stop		; Stop activity indicator
-		 pop	af
+		exx
+		ld	d,b			; Use our variable page
+		exx
+;
+		ld	de,vars.device.byte	; 1 byte buffer
+		ld	bc,1
+		xor	a			; Socket 0 for data
+		call	tcp.read_block		; Read 1 byte
+		ld	b,(iy+vars.device._byte)	; Return 1 byte in B
+		push	af
+	 	 call	status.stop		; Stop activity indicator
+		pop	af
 
-		 jr	read_ret
+		jr	read_ret
 ;		
 ;
 ;------------------------------------------------------------------------------
@@ -2161,26 +2164,14 @@ device_read_byte:
 ; Out: A=EXOS error code
 ;
 device_read_block:
-		push	iy
-		 ld	iy,vars
 ;
-; POKE 'd'
-; POKE 'b'
-; POKEBYTE d
-; POKEBYTE e
-; POKE '('
-; POKEBYTE b
-; POKEBYTE c
-; POKE ')'
-		 ld	(vars.ftp.socket),a
-		 ld	hl,tcp.read_block
-		 call	device.block
+		ld	(vars.ftp.socket),a
+		ld	hl,tcp.read_block
+		xor	a		; Data socket always 0
+		call	device.block
 ;
-read_ret:	pop	iy
-		ret	nc
+read_ret:	ret	nc
 ;
-; POKE '!'
-; POKEBYTE a
 		sub	2
 		ld	a,exos.ERR_EOF
 		ret	m		; Code 1=>socket closed
@@ -2203,26 +2194,26 @@ read_ret:	pop	iy
 ; Out: A=EXOS error code
 ;
 device_write_byte:
-		push	iy
-		 ld	iy,vars
+		ld	(vars.ftp.socket),a
 ;
-		 ld	(vars.ftp.socket),a
+		call	status.start	; Start activity indicator
 ;
-		 call	status.start	; Start activity indicator
+		exx
+		ld	d,b			; Use our page
+		exx
 ;
-		 ld	de,vars.device.byte	; 1 byte buffer
-		 ld	a,b
-		 ld	(de),a
-		 ld	bc,1
-		 xor	a			; Socket 0 for data
-		 call	tcp.write_block		; Write 1 byte
-		 sbc	a,a			; Cy->FF, NC->0
-		 and	exos.ERR_TIMEOUT	; Cy->error code, 0 if no error
+		ld	de,vars.device.byte	; 1 byte buffer
+		ld	a,b
+		ld	(de),a
+		ld	bc,1
+		xor	a			; Socket 0 for data
+		call	tcp.write_block		; Write 1 byte
+		sbc	a,a			; Cy->FF, NC->0
+		and	exos.ERR_TIMEOUT	; Cy->error code, 0 if no error
 ;
-		 push	af
-	 	  call	status.stop		; Stop activity indicator
-		 pop	af
-		pop	iy
+		push	af
+	 	 call	status.stop		; Stop activity indicator
+		pop	af
 		ret
 ;		
 ;
@@ -2236,15 +2227,12 @@ device_write_byte:
 ; Out: A=EXOS error code
 ;
 device_write_block:
-		push	iy
-		 ld	iy,vars
-;
-		 ld	(vars.ftp.socket),a
-		 ld	hl,tcp.write_block
-		 call	device.block
-		 sbc	a,a			; Cy->FF, NC->0
-		 and	exos.ERR_TIMEOUT	; Cy->error code, 0 if no error
-		pop	iy
+		ld	(vars.ftp.socket),a
+		ld	hl,tcp.write_block
+		xor	a			; Data socket always 0
+		call	device.block
+		sbc	a,a			; Cy->FF, NC->0
+		and	exos.ERR_TIMEOUT	; Cy->error code, 0 if no error
 		ret
 ;
 ;
@@ -2259,17 +2247,13 @@ device_write_block:
 ;      C=0=>byte ready, FF=>end of file, 1 otherwise
 ;
 device_status:
-		push	iy
-		 ld	iy,vars
+		ld	(vars.ftp.socket),a
 ;
-		 ld	(vars.ftp.socket),a
-;
-		 xor	a		; Data socket 0
-		 call	tcp.status
-		 ld	c,a
-		 sbc	a,a
-		 and	exos.ERR_TIMEOUT
-		pop	iy
+		xor	a		; Data socket 0
+		call	tcp.status
+		ld	c,a
+		sbc	a,a
+		and	exos.ERR_TIMEOUT
 		ret
 ;
 ;

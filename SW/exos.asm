@@ -340,6 +340,9 @@ FN_ED_CHLD	equ	19h		; EDITOR   - Load document file
 FN_ED_CHSV	equ	1Ah		; EDITOR   - Save document file
 ;
 ;
+FN_MEM_SEG	equ	20h		; MEM: - Get buffer segment
+;
+;
 ;
 ;------------------------------------------------------------------------------
 ;
@@ -381,6 +384,17 @@ MOD_EOF		equ	0Ah		;End of file module
 MOD_VID		equ	0Bh		;Video page file.
 ;
 ;
+;==============================================================================
+;
+; When an EXOS extension allocates device memory, EXOS allows "nearly all" of
+; a segment to be allocated - the first few bytes it keeps pointers etc in.
+; We need our variables to start at a fixed address so we allocate as much
+; of a segment as possible. This is the first address EXOS allocates in a
+; device segment:
+;
+DEVICE_SEG_START	equ	7
+;
+;
 ;------------------------------------------------------------------------------
 ; is_stop
 ;
@@ -415,7 +429,8 @@ check_stop:	call	is_stop
 ;
 ;------------------------------------------------------------------------------
 ;
-explain:	ld	a,b
+explain:
+		ld	a,b
 ;
 		sub	ERR_FIRST	; A=0-based error code if ours
 		ret	c		; Ret if error code < our lowest
@@ -457,7 +472,7 @@ messages:				; Same order as error codes, lowest first!
 ;                    screen col:     1        0         0         0         0
 ;                                    |--------|---------|---------|---------|
 ;                                    *** 
-SOCK_str	db	SOCK_str_lem,	"No free sockets"
+SOCK_str	db	SOCK_str_len,	"No free sockets"
 SOCK_str_len	equ	$-SOCK_str-1	; -1 to exclude length byte itself
 ;
 DHCP_str:	db	DHCP_str_len,	"Cannot get IP address etc with DHCP"

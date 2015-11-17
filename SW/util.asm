@@ -241,29 +241,29 @@ get_ip:		inc	de		; Skip length byte (use B instead)
 ;
 ;
 _get_ip:	call	get_num8_dot
-		inc	hl
-		call	nc,get_num8_dot
-		inc	hl
-		call	nc,get_num8_dot
-		inc	hl
-		call	nc,get_num8
+		call	nc,inc_get_num8_dot
+		call	nc,inc_get_num8_dot
+		call	nc,inc_get_num8
+		ld	(hl),c		; Save it to IP
 		ret
 ;
-get_num8_dot:	call	get_num8
+inc_get_num8_dot:inc	hl
+get_num8_dot:	call	get_num8	; Read number
+		ld	(hl),c		; Save it to IP
 ;
-		dec	b
+		dec	b		; Allow for following .
 		scf
-		ret	m
+		ret	m		; Ret with Cy if no char following
 ;
-		ld	a,(de)
-		inc	de
-		cp	'.'
-		ret	z
+		ld	a,(de)		; Get char following
+		inc	de		; DE->next char from string
+		cp	'.'		; Make sure it's a .
+		ret	z		; With NC if it is
 ;
-		cp	','	; Also allow , (for parsing FTP responses)
+		cp	','		; Also allow , for parsing FTP responses
 		ret	z
 
-		scf
+		scf			; Invalid char following number
 		ret
 ;
 ;
@@ -273,36 +273,37 @@ get_num8_dot:	call	get_num8
 ; Reads an ASCII 8-bit number from a length-byte string
 ;
 ; In:  DE->string
-;      HL->number
 ;       B=length of data at (DE)
 ; Out: DE->first non-numeric character
-;      HL->number
+;       C=>number
 ;       B updated
+;      HL preserved
 ;      Cy=>bad number
 ;
-get_num8:	call	get_dig
-		ret	c
+inc_get_num8:	inc	hl
+get_num8:	call	get_dig		; Check at least one digit
+		ret	c		; Error if not
 ;
-		ld	(hl),0
-.loop:		call	get_dig
+		ld	c,0		; Zero accumulator
+.loop:		call	get_dig		; Get digit from number
 		ccf
-		ret	nc
+		ret	nc		; Return with NC if end of number
 ;
-		inc	de
-		push	af
-		ld	a,(hl)
-		add	a,a
-		ld	c,a
-		add	a,a
-		add	a,a
-		add	a,c
-		ld	c,a
-		pop	af
-		add	a,c
-		ld	(hl),a
-		djnz	.loop
+		inc	de		; DE->next digit for next time
+		push	af		; Save digit
+		ld	a,c		; A=accumulator
+		add	a,a		; A=acc*2
+		ld	c,a		; C=acc*2
+		add	a,a		; A=acc*4
+		add	a,a		; A=acc*8
+		add	a,c		; A=acc*10
+		ld	c,a		; C=acc*10
+		pop	af		; A=digit
+		add	a,c		; A=acc*10+digit
+		ld	c,a		; C=new accumulator value
+		djnz	.loop		; Do rest of digits
 ;
-		ret
+		ret			; End of string, still NC
 ;
 ;
 get_dig:

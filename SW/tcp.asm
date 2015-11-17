@@ -100,17 +100,23 @@ _header:	call	socket._available; See if any bytes available to read
 ; This is called from the EXOS device to read a block of data into the user's
 ; buffer. It must cope with odd-length reads and multiple TCP packets.
 ;
-; In:  A=socket number
-;     DE->buffer
-;     BC=total number of bytes to read, >0
+; In:     A =socket number
+;     D':DE ->buffer
+;        BC =total number of bytes to read, >0
+;         B'=our segment
+;         C'->P1
 ; Out: NC & A=0 if no error
 ;      Cy=>error, A=1 => socket closed, A=2 => STOP pressed, A=3 => timeout
 ;
 read_block:
+; POKE '{'
 		ex	de,hl		; HL->user's buffer
 		SOCKET_GET_BASE		; DE=socket base register
 ;
 .loop:
+; POKE 'l'
+; POKEBYTE d
+; POKEBYTE e
 		ld	a,b		; See if byte count == 0
 		or	c
 		ret	z		; All done
@@ -128,7 +134,18 @@ read_block:
 		 ld	a,(hl)		; Get buffered byte
 		pop	hl		; HL->user's buffer
 ;
-.putbyte:	ld	(hl),a		; Put byte into user's buffer
+.putbyte:	exx
+		out	(c),d		; Switch to user's paging
+		exx
+; POKE '='
+; POKEBYTE a
+;
+		ld	(hl),a		; Put byte into user's buffer
+;
+		exx
+		out	(c),b		; Switch back to our paging
+		exx
+;
 		inc	hl		; Adjust ->user's buffer
 		dec	bc		; Adjust total byte count
 		jr	.loop		; Repeat but now we know no byte buffered
@@ -160,10 +177,15 @@ read_block:
 		 ld	hl,(vars.ticks)	; Setup timout timer
 		 ld	(vars.tcp.start),hl
 ;
-.wait:		 call	_header		; See if packet arrived
+.wait:
+; POKE 'w'
+; POKEBYTE d
+; POKEBYTE e
+		 call	_header		; See if packet arrived
 		 jr	nz,.got_packet	; Go and read it if yes
 ;
 		 call	socket._is_closed; Other end closed connection
+; POKEcc z,'e'
 		 ld	a,1
 		 jr	z,.ret		; Return with A=1 if yes
 ;
@@ -192,6 +214,7 @@ read_block:
 ;
 .got_packet:	pop	bc
 		pop	hl
+; POKE 'g'
 ;
 		; Here there is a packet buffered and we need one or more
 		; bytes from it
@@ -208,7 +231,7 @@ read_block:
 		   ld	c,(hl)
 		   inc	hl
 		   ld	b,(hl)	; BC=amount available
-		   res	0,c	; Only doing even bytes (could == 0!)
+		   res	0,c	; Only doing even bytes (could now = 0!)
 		  pop	hl	; HL=#even bytes required
 		  or	a
 		  sbc	hl,bc	; HL=remainder after read
@@ -232,12 +255,14 @@ read_block:
 		  add	hl,bc	; HL->user's buffer updated
 		 ex	(sp),hl	; HL->user's buffer, (SP)->buffer updated
 		  push	bc	; Save amount to read
-		   call	socket._read	; Read the bytes; HL->rx_size
-;
+		   exx
+		   ld	e,d	; Setup for user's paging
+		   exx
+		   call	socket._readx	; Read the bytes; HL->rx_size
 		   ld	a,(hl)
 		   inc	hl
 		   or	(hl)	; See if we've read everything
-		   call	z,socket._send_end	; Indicate end of read if we have
+		   call	z,socket._recv	; Indicate end of read if we have
 		  pop	bc	; BC=amount just read
 		 pop	hl	; HL->user's buffer updated
 		ex	(sp),hl	; HL=total byte count, (SP)=buffer updated
@@ -251,6 +276,7 @@ read_block:
 ;
 .odd:		pop	bc	; BC=total byte count
 ;
+; POKE 'o'
 		; We now have a packet and have read as many even bytes as we
 		; can from it. If we end up here either a) it's an odd-length
 		; read and we need the last odd byte, or b) we have an
@@ -274,7 +300,7 @@ read_block:
 		   ld	a,(hl)	; Check rx_size to see if we've read everything
 		   inc	hl
 		   or	(hl)	; See if we've read everything
-		   call	z,socket._send_end ; Indicate end of read if we have
+		   call	z,socket._recv	; Indicate end of read if we have
 		  pop	af	; Cy=>read past last byte
 		 pop	hl	; HL->rx_inhand
 		 ccf		; NC=>last byte, Cy=>not last byte
@@ -294,9 +320,11 @@ read_block:
 ; buffer. It must cope with odd-length writes and splitting large blocks into
 ; multiple TCP packets.
 ;
-; In:  A=socket number
-;     DE->buffer
-;     BC=total number of bytes to read, >0
+; In:      A=socket number
+;     D':DE ->buffer
+;        BC =total number of bytes to read, >0
+;         C'->P1
+;         B'=our seg
 ; Out: Cy=>error
 ;
 write_block:
@@ -340,7 +368,10 @@ write_block:
 		  res	0,c		; We'll do odd bytes l8r
 		  ld	a,b
 		  or	c		; NC as well as testing BC
-		  call	nz,_write_block
+		  exx
+		  ld	e,d		; Set up for user's paging
+		  exx
+		  call	nz,_write_blockx
 		 pop	bc		; BC=byte count jusrt written
 		pop	hl		; HL->user's buffer
 ;
@@ -370,6 +401,9 @@ write_block:
 ; an even byte count. However it could be a large block so we might have to
 ; split it up into separate WIZ sends ( ie. separate TCP packets)
 ;
+; _write_block is called when the buffer is in our memory
+; _write_blockx uses the segment in E' is the segment for the buffer
+;
 ; In:  HL->bufer
 ;      BC=word byte, >0
 ;      DE=socket register base
@@ -378,6 +412,12 @@ write_block:
 ;
 _write_block:
 ;
+		exx
+		ld	e,b		; Use our seg
+		exx
+;
+_write_blockx:				; E' must be set up with seg
+
 		; First see if it's time to send a packet
 		push	hl		; Save ->data
 		 push	bc		; Save byte count
@@ -425,7 +465,7 @@ _write_block:
 		pop	bc		; BC=#bytes remaining
 		ld	a,b
 		or	c
-		jr	nz,_write_block	; Do it again if more to write
+		jr	nz,_write_blockx; Do it again if more to write
 ;
 		ret			; NC =>no error
 ;
@@ -533,12 +573,14 @@ connect:	call	socket.connect	; Attempt t connect
 ;
 disconnect:	SOCKET_GET_BASE
 _disconnect:
-		call	.readall	; Make we have a rx window<>0
+		call	.readall	; Make sure we have a rx window<>0
 ;
 		SOCKET_GET_VAR socket.vars.tcp_connected
 		ld	(hl),0		; 0=>not connected any more
 ;
-		call	socket._disconnect	; Send disconnect
+		push	de
+		 call	socket._disconnect	; Send disconnect
+		pop	de
 ;
 .readall:	ld	a,socket.vars.rx_size
 		call	socket.get_word	; HL=no. bytes left to read

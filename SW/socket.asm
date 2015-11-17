@@ -195,10 +195,12 @@ write_reg:	ld	c,(iy+vars._io)	; Address Register H
 ;
 ; Reads a block of words from a wiz rx fifo
 ;
-; In:  HL->block
-;      DE=w5300 socket base register
-;      BC=byte count
-; Out: All input registers corrupted
+; In:  E':HL->block
+;         DE=w5300 socket base register
+;         BC=byte count
+;         C'->P1
+;         B'=our seg
+; Out: All main set input registers corrupted
 ;
 _read_FIFO:
 ;
@@ -238,7 +240,11 @@ _read_FIFO:
 		or	e		; A=Sn_xxx register number
 		out	(c),a		; Output address register L
 		inc	c		; C->Data register H
-
+;
+		exx
+		out	(c),e		; Page in data buffer
+		exx
+;
 		inc	c		; Compensate for initial dec c
 .loop:		dec	c		;  4
 		ini			; 16
@@ -250,7 +256,11 @@ _read_FIFO:
 
 		dec	d		;  4
 		jr	nz,.loop	; 10
-
+;
+		exx
+		out	(c),b		; Restore paging
+		exx
+;
 		jp	status.inactivity
 ;
 ;
@@ -259,11 +269,13 @@ _read_FIFO:
 ;
 ; Writes a block of words to a wiz tx fifo
 ;
-; In:  HL->block
-;      DE=wiz FIFO register number
-;      BC=byte count (must be even)
+; In:  E':HL ->block
+;         DE =wiz FIFO register number
+;         BC =byte count (must be even)
+;          C'->P1
+;          B'=our seg
 ; Out: HL->next word in black
-;      All other input registers corrupted
+;      All main input registers corrupted
 ;
 _write_FIFO:
 		call	status.activity
@@ -286,6 +298,10 @@ _write_FIFO:
 		out	(c),a		; Output address register L
 		inc	c		; C->Data register H
 ;
+		exx
+		out	(c),e		; Page in data buffer
+		exx
+;
 		inc	c		; Compensate for initial dec c
 .loop:		dec	c		;  4 C->Data Register L
 		outi			; 16
@@ -294,16 +310,27 @@ _write_FIFO:
 		jp	nz,.loop	; 10
 					; --
 					; 50
-
+;
 		dec	d		;  4
 		jr	nz,.loop	; 10
-
+;
+		exx
+		out	(c),b		; Restore paging
+		exx
+;
 		jp	status.inactivity
 ;
 ;
 ;------------------------------------------------------------------------------
+; read_FIFO
+;
+; Reads the WIZ FIFO into a memory buffer.
+;
 ; This is where raw trace mode is implemented. If raw mode is on the words are
 ; output in a hex dump (but as bytes of course!)
+;
+; A lot of pushing and popping is required for trace mode, so for speed the
+; code is arranged to avoid this if trace mode is off.
 ;
 ; read_header is used to read the WIZ PACKET_INFO that is put in front of the
 ; real data. It is the same as read_FIFO but in raw trace mode the output
@@ -317,11 +344,21 @@ _write_FIFO:
 ; read the protocol type here and act accordingly but as the caller knows their
 ; own protocol it is easier just to do it there.
 ;
-; In:   HL->block
-;       BC=byte count
-;       DE=reg base
+; For read_FIFO E' contains the buffer segment, but read_header only ever reads
+; into our own memory so it sets up E' here.
+;
+; In: E':HL->block
+;        BC=byte count
+;        DE=reg base
+;         C'->P1
+;         B'=our seg
+;
 read_header_0:	SOCKET_GET_BASE_0
-read_header:	bit	vars.trace.raw,(iy+vars._trace)
+read_header:	exx
+		ld	e,b	; Data buffer is in our own seg
+		exx
+;
+		bit	vars.trace.raw,(iy+vars._trace)
 		jr	z,_read_FIFO
 ;
 		ld	a,'H'
@@ -351,7 +388,7 @@ rd_FIFO:	push	af
 dump:		bit	0,(iy+vars._socket.flushing)	; Supress raw output
 		ret	nz
 ;
-		call	exos.is_stop	; Check BEFORE printing anything as this may
+		call	exos.is_stop; Check BEFORE printing anything as this may
 		ret	c	;   get called several times after STOP
 
 		push	bc
@@ -373,6 +410,12 @@ dump:		bit	0,(iy+vars._socket.flushing)	; Supress raw output
 		 ld	a,':'
 		 call	io.char
 ;
+		 exx
+		 ld	a,e		; Get segment
+		 exx
+		 call	io.byte
+		 ld	a,':'
+		 call	io.char
 		 call	io.word	; Print address
 		 call	io.space
 ;
@@ -422,7 +465,7 @@ dump:		bit	0,(iy+vars._socket.flushing)	; Supress raw output
 		 ld	a,'+'
 		 call	io.char
 		 call	io.int
-		 call	io.space
+		 call	io.crlf
 ;
 .done:		pop	hl
 		pop	de
@@ -431,9 +474,18 @@ dump:		bit	0,(iy+vars._socket.flushing)	; Supress raw output
 		ret
 ;
 ;
-; HL->block
-; BC=byte count
-; DE=reg base
+;------------------------------------------------------------------------------
+; write_FIFO
+;
+; Writes the WIZ FIFO from a memory buffer
+;
+; In: E':HL ->block
+;        BC =byte count
+;        DE =reg base
+;         C'->P1
+;         B'=our seg
+; Out:   DE preserved.
+;        All othermain registers corrupted
 ;
 write_FIFO:	push	de
 ;
@@ -702,11 +754,17 @@ write_CR:
 		cp	c
 		ret	z		; SSR as expectd, NC
 ;
-		cp	w5300.Sn_SSR_CLOSED
-		scf			; If it's closed it'll never change!
+		cp	w5300.Sn_SSR_CLOSED	; See if socket has closed
+		jr	nz,.wait	; Keep waiting if not
+;
+		ld	a,c		; A=expected state
+		cp	w5300.Sn_SSR_FIN_WAIT	; Closed also ok!
 		ret	z
+;
+		scf			; If it's closed it'll never change!
+		ret
 
-		call	status.waiting	; Flash status line waiting indicator
+.wait:		call	status.waiting	; Flash status line waiting indicator
 ;
 		call	exos.is_stop	; See if stop key pressed
 		ret	c		; Ret with C if yes
@@ -775,6 +833,10 @@ _is_closed:
 ;
 ; Reads from an open socket.
 ;
+; read and _read are only called to read into our own buffer, so set up
+; the paging for read_FIFO appropriately. _readx is called from the EXOS
+; devices to read into user's memory, so set up E' before calling.
+;
 ; We can only read words from the WIZ chip, not bytes, so to read the last
 ; byte of an odd-length packet we read the last byte and a dummy byte. We
 ; return Cy here if that is the case.
@@ -788,8 +850,12 @@ _is_closed:
 ;
 read_0		xor	a
 read:		SOCKET_GET_BASE
-
-_read:
+;
+_read:		exx
+		ld	e,b		; Use our seg
+		exx
+;
+_readx:		; E' must be set to page for buffer
 		push	bc
 		 inc	bc		; Round up to even number
 		 res	0,c
@@ -921,6 +987,9 @@ _read_flush:	set	0,(iy+vars._socket.flushing)	; Supress raw output
 		sbc	hl,hl		; HL=amount to read next time (0)
 .sizeok:	push	hl		; Save amount to read next time
 		 ld	hl,vars.dhcp.packet	; Buffer to read to
+		 exx
+		 ld	e,b		; Use our segment
+		 exx
 		 push	de
 		  call	read_FIFO
 		 pop	de
@@ -947,7 +1016,7 @@ _read_flush:	set	0,(iy+vars._socket.flushing)	; Supress raw output
 ; the packet, so it needs to call read_flush because the WIZ w5300 insists
 ; we read everything.
 ;
-; _send_end can be called to send the RECV command to the w5300 if we are
+; _recv can be called to send the RECV command to the w5300 if we are
 ; certain everything has been read. (tcp.read_block does this because it
 ; doesn't want to loose any bytes buffered in rx_inhand).
 ;
@@ -959,7 +1028,7 @@ read_end:	SOCKET_GET_BASE
 ;
 _read_end:	call	_read_flush		; Read any unread words
 ;
-_send_end:	ld	hl,w5300.Sn_CR_RECV	; Received!
+_recv:		ld	hl,w5300.Sn_CR_RECV	; Received!
 		ld	a,w5300.Sn_CR
 		jp	write_reg
 ;
@@ -977,7 +1046,11 @@ _send_end:	ld	hl,w5300.Sn_CR_RECV	; Received!
 write_0:	xor	a
 write:		SOCKET_GET_BASE
 ;
-_write:		push	hl	; Save user's buffer ptr
+_write:		exx
+		ld	e,b	; Use our seg for buffer
+		exx
+;
+		push	hl	; Save user's buffer ptr
 		 call	read_FSR; Check FSR to make sure there's enough room 
 		 or	a
 		 sbc	hl,bc
@@ -1274,7 +1347,7 @@ close:		push	af		; Save socket no
 find:		ld	hl,vars.socket.last	; Last socket opened
 		ld	a,(hl)
 .inc:		inc	a
-		and	win.SOCKETS-1
+		and	wiz.SOCKETS-1
 		jr	z,.inc		; Ignore socket 0
 ;
 		cp	(hl)		; Uh-oh, no free sockets

@@ -1374,7 +1374,8 @@ HTTP_PORT	equ	80		; Dest port always 80 for HTTP protocol
 ; This is the data kept in EXOS channel RAM.
 ;
 ; EXOS channel RAM is accessed at (ix-1), (ix-2)...etc so our data here is
-; accessed with (ix-1-<item>) eg (ix-1-http_channel.socket)
+; accessed with (ix-1-<item>) eg (ix-1-http_channel.socket). But it must
+; first be paged into page 1 - the page in kept in L'.
 ;
 ; socket must be first as some of the generic device code expects it here.
 ;
@@ -1396,14 +1397,17 @@ size_L		 byte
 ; Out: A=EXOS error code
 ;
 device_open:
-		ld	(ix-1-http_channel.socket),HTTP_SOCKET
+		exx
+		out	(c),l		; Channel RAM page
+		ld	 (ix-1-http_channel.socket),HTTP_SOCKET
+		out	(c),b		; Back to our page
+		exx
 ;
 		bit	vars.trace.http,(iy+vars._trace)
 		jr	z,.donetrace
 ;
 		push	de
 		push	bc
-;
 		 ld	de,trace.http.open
 		 call	trace
 ;
@@ -1421,18 +1425,26 @@ device_open:
 		push	de
 		push	bc
 		 ld	hl,42		; Source port
-		 ld	a,(ix-1-http_channel.socket)
+;
+		 exx
+		 out	(c),l		; Channel RAM page
+		 ld	a,(ix-1-http_channel.socket)	; Get socket number
+		 out	(c),b		; Back to our page
+		 exx
+;
 		 ld	de,owner_str	; Our name
-		 call	tcp.open
+		 push	af		; Save socket number
+		  call	tcp.open
+		 pop	bc		; B=socket number
+		 ld	a,b		; A=socket number without corrupting F
 		 ld	hl,HTTP_PORT	; HL=dest port
 		 ld	de,vars.device.ip; DE->ip address
-		 ld	a,(ix-1-http_channel.socket)
-		 call	nc,tcp.connect
-		 sbc	a,a
-		 and	exos.ERR_NOCON
+		 call	nc,tcp.connect	; Connect to server
+		 sbc	a,a		; Error (Cy)->FF, no error (NC)->0
+		 and	exos.ERR_NOCON	; Error & NZ or 0 & Z
 		pop	bc
 		pop	de
-		jr	nz,.ret
+		jr	nz,.ret		; Go if error
 ;
 		call	send		; Send a "GET" request
 		jr	nz,.ret
@@ -1446,7 +1458,7 @@ device_open:
 		or	a
 		jr	nz,.ret
 ;
-		ld	de,http_1.0_str		; Make sure it starts with HTTP...
+		ld	de,http_1.0_str	; Make sure it starts with HTTP...
 		ld	b,http_1.0_str_len
 		call	util.memcmp
 		jr	nz,.badpacket
@@ -1480,7 +1492,10 @@ device_open:
 		jr	z,.ret
 ;
 .badpacket:	ld	a,exos.ERR_BADHTTP
-		jr	.ret
+.ret:		push	af
+		 call	status.stop
+		pop	af
+		ret
 ;
 		; Now we read and discard all other lines until we reach the
 		; end of the header
@@ -1504,8 +1519,17 @@ device_open:
 ;
 		ex	de,hl			; DE->length in packet
 		call	util.get_num16		; HL=size
+;
+		; Save size to channel RAM
+		push	hl
+		 exx
+		 out	(c),l			; Channel RAM page
+		pop	hl			; HL=size
 		ld	(ix-1-http_channel.size_L),l; Save size of packet body
 		ld	(ix-1-http_channel.size_H),h
+		in	l,(c)			; Restore seg normally in L'
+		out	(c),b			; Back to our page
+		exx
 ;
 		bit	vars.trace.http,(iy+vars._trace)
 		jr	z,.donelentrace
@@ -1515,11 +1539,6 @@ device_open:
 		call	io.int
 ;
 .donelentrace:	jr	.nextline		; Finish reading header
-;
-.ret:		push	af
-		 call	status.stop
-		pop	af
-		ret
 ;
 ;
 
@@ -1533,7 +1552,13 @@ readline:
 .next:		 inc	de
 .ignore:	 push	de		; Save ->current byte
 		  ld	bc,1		; Read 1 byte
+;
+		  exx
+		  out	(c),l		; Channel RAM page
 		  ld	a,(ix-1-http_channel.socket)
+		  out	(c),b		; Back to our page
+		  exx
+;
 		  call	tcp.read_block
 		 pop	de		; DE->current byte
 		 jr	c,.err
@@ -1597,12 +1622,12 @@ send:		push	de
 		 ld	hl,get_str	; "GET "
 		 ld	bc,get_str_len
 		 ldir			; Copy GET to packet
+		pop	bc		; B="filename" length
+		pop	hl		; HL->"filename"
 ;
-		pop	bc		; B=URI length
-		pop	hl		; HL->URI
-		ld	c,b		; C=URI length
+		ld	c,b		; C=length
 		xor	a
-		ld	b,a		; BC=URI length
+		ld	b,a		; BC=length
 		or	c
 		jr	z,.donefn	; Just in case!
 ;
@@ -1649,9 +1674,17 @@ send:		push	de
 		ld	c,l
 		ld	b,h		; BC=length of packet
 		ex	de,hl		; HL->packet
-		ld	a,(ix-1-http_channel.socket)
+;
+		exx
+		out	(c),l		; Channel RAM page
+		ld	a,(ix-1-http_channel.socket)	; Gert socket number
+		out	(c),b		; Back to our page
+		exx
+;
+		push	af		; Save socket number
 		call	socket.write
-		ld	a,(ix-1-http_channel.socket)
+		pop	bc		; B=socket number
+		ld	a,b		; A=socket number without corrupting Cy
 		call	nc,tcp.send
 ;
 		bit	vars.trace.http,(iy+vars._trace)
@@ -1680,7 +1713,11 @@ trace:		call	io.start
 		call	io.char
 		ld	a,'P'
 		call	io.char
+		exx
+		out	(c),l		; Channel RAM page
 		ld	a,(ix-1-http_channel.socket)
+		out	(c),b		; Back to our page
+		exx
 		add	a,'0'
 		call	io.char
 		ld	a,':'

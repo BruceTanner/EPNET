@@ -32,14 +32,16 @@
 ;
 major		equ	'0'
 minor		equ	'1'
-revision	equ	'1'
+revision	equ	'2'
 ;
 ;
 ; History:
 ;
 ; VERSION	DATE		DESCRIPTION
-; 0.11		ongoing
-; 0.10		unknown		Initial version sent to lgb
+; 0.13		ongoing
+; 0.12		2015-11-17	Second version on Github, vars in allocated seg
+; 0.11		2015-11-3	Put on Githib
+; 0.10		unknown		Sent to lgb for JSEP
 ;
 ;
 		endmodule

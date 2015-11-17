@@ -31,11 +31,40 @@
 ;
 ;==============================================================================
 ;
+		ifdef	DEBUG
+byte:		 push	af
+		  rrca
+		  rrca
+		  rrca
+		  rrca
+		  call	nib
+		 pop	af
+;
+nib:		 and	0fh
+		 add	a,'0'
+		 cp	'9'+1
+		 jr	c,char
+		 add	a,'A'-'9'-1
+char:		 push	af
+		 push	bc
+		 push	de
+		 push	hl
+		  ld	b,a
+		  ld	a,0ffh
+		  rst	30h
+		  db	exos.FN_WRCH
+		 pop	hl
+		 pop	de
+		 pop	bc
+		 pop	af
+		 ret
+		endif
+;		
 		macro POKE ch
 		 ifdef	DEBUG
 		  push	af
 		  ld	a,ch
-		  call	io.char
+		  call	char
 		  pop	af
 		 endif
 		endm
@@ -44,7 +73,7 @@
 		 ifdef DEBUG
 		  push	af
 		  ld	a,ch
-		  call	cond,io.char
+		  call	cond,char
 		  pop	af
 		 endif
 		endm
@@ -53,7 +82,7 @@
 		 ifdef	DEBUG
 		  push	af
 		  ld	a,reg
-		  call	io.byte
+		  call	byte
 		  pop	af
 		 endif
 		endm

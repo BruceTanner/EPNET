@@ -29,16 +29,21 @@
 ; brucetanner@btopenworld.com
 ;
 ;==============================================================================
+prog_end:
+;------------------------------------------------------------------------------
+; vars
 ;
-		ds	0f000h-$,0ffh
-@vars:
-;
+; These are all the variables, buffers etc.
 ;
 ; Throughout the program, IY points to the variables and the variables can
 ; be accessed either directly, as in LD A,(variable), or via IY as in
 ; LD C,(IY+offset to variable). This is particularly useful for global flags
 ; which can be tested with BIT n,(IY+offset), allowing a flag to be tested
 ; without corrupting A (or any other registers).
+;
+		org	4007h
+;
+@vars:
 ;
 ;
 _trace		equ	$-vars		; Offset from @vars
@@ -83,6 +88,7 @@ init.lease_mask	equ	04h
 ;
 _socket.flushing equ	$-vars
 socket.flushing	ds	1		;NZ=>don't dump, we're flushing (!)
+socket.last:	ds	1		; Last socket opened
 ;
 ;
 _io.col		equ	$-vars		; Offset from vars
@@ -103,6 +109,9 @@ status.byte:	ds	1		; Saved byte at our pos on status line
 ;
 device._byte	equ	$-vars		; As offset from vars
 device.byte	ds	1		; Single byte buffer for byte read/write
+mem.seg		ds	1		; MEM: device segment
+mem.rd		ds	2		; MEM: device read pointer
+mem.wr		ds	2		; MEM: device write pointer
 ;
 ;
 tcp.start:	ds	2		; Start tick count for timeouts
@@ -169,9 +178,10 @@ ftp.pass_size		equ	$-ftp.pass
 ;
 ;
 ; Per-socket variables, must be on a 256-byte page boundary.
-; See socket.c for access methods
+; See socket.asm for access methods
 ;
-			ds	0f200h-$,0ffh
+			org	(vars AND 0ff00h)+200h
+;
 sockets:				; Per-socket variables
 ;
 socket_size		equ	20h	; Size of each per-socket variable area
@@ -241,5 +251,8 @@ http.packet_size	equ	$-http.packet
 ;
 varsize		equ	$-vars
 ;
-
+		org	prog_end
+;
+;
+;
 		endmodule

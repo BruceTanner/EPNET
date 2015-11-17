@@ -913,8 +913,7 @@ read:
 		or	a
 		sbc	hl,bc
 		ld	de,trace.dhcp.port
- jp	nz,.badpacket
-;		jr	nz,.badpacket
+		jr	nz,.badpacket
 ;
 		; Check it's the right sort of DHCP reply
 		ld	a,(vars.dhcp.packet.op)

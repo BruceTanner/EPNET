@@ -76,7 +76,7 @@ start:
 		 ld	a,(hl)			; Get current char there
 		 ld	(vars.status.byte),a	; Save it
 ;
-		 ld	(iy+vars.status._ticks),0; Zero ticks so blob
+		 ld	(iy+vars.status._ticks),0; Zero ticks so blob does
 		pop	hl			;   not show initially
 		ret
 ;

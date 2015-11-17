@@ -169,13 +169,22 @@ err:		call	exos.is_stop
 ;------------------------------------------------------------------------------
 ; dumpbytes, dumpchars
 ;
-; Outputs a memory dump at (HL) for B bytes
+; In:  E':HL->memory to dump
+;          B=number of bytes
+;          C'->P1
+;          B'=our segment
 ;
 dumpbytes:
 .loop:		call	exos.is_stop
 		ret	c		; Return with Cy if STOP key presed
 ;
+		exx
+		out	(c),e		; Page in data segment
+		exx
 		ld	a,(hl)		; Get byte
+		exx
+		out	(c),b		; Page our seg back in
+		exx
 		inc	hl
 		call	io.byte		; Print it
 		call	io.space	; Followed by a space
@@ -189,7 +198,13 @@ dumpchars:
 .loop:		call	exos.is_stop
 		ret	c		; Return with Cy if STOP key presed
 ;
+		exx
+		out	(c),e		; Page in data seg
+		exx
 		ld	a,(hl)		; Get byte
+		exx
+		out	(c),b		; Page our seg back in
+		exx
 		inc	hl
 		cp	0a0h		; Chars >=A0 are editor control chars
 		jr	nc,.dot
@@ -201,7 +216,6 @@ dumpchars:
 .ascii:		call	io.char
 		djnz	.loop
 ;
-		call	io.space
 		or	a		; NC=>STOP not pressed
 		ret
 ;

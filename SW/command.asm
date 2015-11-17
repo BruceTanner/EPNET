@@ -34,11 +34,32 @@
 ; Passed a command at (DE), looks to see if it is one of our commands and
 ; prints help text if it is.
 ;
+; Most of our commands are of the form :NET <cmd>, so we have to deal with
+; these sub-commands. eg. :NET STATUS. But some of our commands are also "top
+; level" commands, eg :FTP, :PING so we have to cope with these too.
+;
+; :HELP			prints a general help line
+; :HELP NET		prints a help page showing all the :NET commands
+; :HELP NET <cmd>	prints specific help for :NET <cmd>
+; :HELP <cmd>		prints specific help for top-level command <cmd>
+;
+; The top-level commands are also :NET commands eg :NET FTP, :NET PING work
+;
+; But there is also a :NET HELP command! This works the same way eg
+;
+; :NET HELP		same as :HELP NET
+; :NET HELP <cmd>	same as :HELP NET <cmd>
+;
+; and, yes, you can also go :NET HELP NET <cmd> but it must print out the help
+; for <cmd> assuming <cmd> is a :NET command, not a top level command.
+; 
 ; In:  B=length. 0 if it's general help ie. just :HELP rather than :HELP <cmd>
 ;     DE->command
 ;
-help:		ld	a,b		; See if it's general or specific HELP
+help:
+		ld	a,b		; See if it's general or specific HELP
 		or	a
+		ld	hl,.nothelpnet	; :HELP <not-net-cmd> goes to here
 		jr	nz,specific
 ;
 		push	de		; General help so just print message
@@ -49,40 +70,51 @@ help:		ld	a,b		; See if it's general or specific HELP
 		pop	de
 		ret			; Preserving DE and B
 ;		
-nothelpnet:	ld	hl,main_tab	; Find command in our command table
+.nothelpnet:	; Not :HELP NET (eg. :HELP FTP or :HELP PING) 
+		ld	hl,main_tab	; Find command in our command table
 		call	find		; HL=offset into command table
 		ret	c		; Cy=>Not found
 ;
 ;
 		ld	de,main_help_tab; Find help text ptr in help table
-help_cmd:	add	hl,de
+get_help:	add	hl,de
 		ld	e,(hl)		; Get pointer to command help text
 		inc	hl
 		ld	d,(hl)
+		jr	helpout		; Just print general NET help
 ;
+helpnet:	ld	de,net_help_str	; HELP NET with no extra commands
 helpout:	CALL	io.str
 		xor	a
                 ld	c,a		; C=0 => recognized
                 ret
 ;
-specific:	ld	hl,net_str	; HELP NET?
-                call	compare
-		jr	nz,nothelpnet	; Go & check for other commands if not
+nethelp:	; This is :NET HELP
+		jr	z,helpnet	; :NET HELP => :HELP NET!
+;
+		ld	hl,notnethelpnet; :NET HELP <cmd> goes to here
+;
+specific:	; :HELP <cmd> searches the top level commands for <cmd>
+		; :NET HELP <cmd> searches the NET command table
+		; :HELP NET <cmd> and :NET HELP NET <cmd> both do the same
+		; so here HL->action if the next word is not NET
+		push	hl
+		 ld	hl,net_str	; :HELP NET or :NET HELP NET?
+                 call	compare
+		pop	hl
+		jp	nz,jphl		; Go & check for other commands if not
 ;
 		ld 	b,net_str_len	; Skip NET to find sub-command
 		call	skip
 ;
-nethelp:	jr	z,.helpnet	; Go if none
+		jr	z,helpnet	; Go if none
 ;
-		ld	hl,net_tab	; Find command in our command table
+notnethelpnet:	ld	hl,net_tab	; Find command in our command table
 		call	find		; HL=offset into command table
-		jr	c,.helpnet	; Go if not found
+		jr	c,helpnet	; Go if not found
 ;
 		ld	de,net_help_tab	; Find help text ptr in help table
-		jr	help_cmd
-;
-.helpnet:	ld	de,net_help_str	; HELP NET with no extra commands
-		jr	helpout		; Just print general NET help
+		jr	get_help
 ;
 ;
 ;------------------------------------------------------------------------------
@@ -736,20 +768,49 @@ time:		call	netstart
 ;
 ;
 ;------------------------------------------------------------------------------
+; special
+;
+; This is a special command that cannot be typed by the user. It is used by
+; our ROM devices to find out our variable's RAM segment. This is allocated
+; by this EXOS extension so EXOS tells us about it here, in fact pages it in
+; to page 1 for us, but does not tell the devices about it, hence this call.
+;
+; Out:  B=RAM segment no.
+;       C=I/O base address
+;
+special:	in	a,(ep.P1)	; Get RAM segment
+		ld	b,a		; Return in B
+;
+		ld	a,(io)		; Get fixed ROM i/o address byte
+		or	a		; Using fixed i/o?
+		jr	nz,.gotio	; <>0 => yes
+;
+		in	a,(ep.P3)	; Else get our ROM seg no
+		rrca			; /2 gives i/o base address
+.gotio:		ld	e,a		; Return I/O in E
+		xor	a
+		ld	c,a
+		ret
+;
+;
+;------------------------------------------------------------------------------
 ; main commands - string table, help string table and jump table in same order!
 ;
-main_tab:	dw	 net_str
-		dw	 ftp_str
-		dw	ping_str
+main_tab:	dw	    net_str
+		dw	    ftp_str
+		dw	   ping_str
+		dw	special_str
 		dw	0
 ;
-main_help_tab:	dw	 net_help_str	; Same order as above
-		dw	 ftp_help_str
-		dw	ping_help_str
+main_help_tab:	dw	    net_help_str	; Same order as above
+		dw	    ftp_help_str
+		dw	   ping_help_str
+		dw	special_help_str
 ;
 main_cmd_tab:	dw	net		; Same order as above
 		dw	ftp
 		dw	ping
+		dw	special
 ;
 ;
 ;------------------------------------------------------------------------------
@@ -839,7 +900,11 @@ rmdir_str:	db	5,"RMDIR"
 ;
 version_str:	db	"NET   version "
 		db	version.major, ".", version.minor, version.revision,CR,LF
-		db	0
+special_help_str: db	0
+;
+;
+; All the help text below is designed to look OK on both a 40 and 80 column
+; screen
 ;
 ; 40 col screen limit:	 |........|.........|.........|.........|
 ;
@@ -855,46 +920,54 @@ net_help_str	db	"Available :NET commands:",CR,LF
 		db	"NET TIME   sets the system time & date",CR,LF
 		db	CR,LF
 		db	"Type :HELP NET <cmd> for specific help",CR,LF
+		db	CR,LF
+		db	"Several EXOS devices are available",CR,LF
+		db	"eg. load \"HTTP:192.168.1.1/demo.bas\"",CR,LF
+		db	"    load \"FTP:demo.bas\"",CR,LF
+		db	"    open #1:\"TCP:192.168.1.64-80\"",CR,LF
 		db	0
 ;
 diag_help_str	db	"NET DIAG is the same as NET START "
 		db	"but with diagnostic messages",CR,LF,0
 ;
-start_help_str	db	"NET START starts the network and ",CR,LF
+start_help_str	db	"NET START starts the network and "
 		db	"gets the IP address etc. using DHCP",CR,LF
 		db	0
 ;
 ftp_help_str	db	"NET FTP connects to a remote FTP server "
 		db	"and provides various commands:",CR,LF
 		db	CR,LF
-		db	"FTP LOGIN <ip> connects to a server",CR,LF
+		db	"FTP LOGIN <host> connects to a server",CR,LF
 		db	"FTP LOGOUT disconnects from a server",CR,LF
 		db	"FTP STATUS displays server information",CR,LF
 		db	"FTP DIR    lists remote directory",CR,LF
 		db	"FTP CD     changes remote directory",CR,LF
 		db	"FTP DEL    deletes remote files",CR,LF
-		db	"FTP REN    renames remote files",CR,LF
-		db	"FTP MD     makes dremote directory",CR,LF
+		db	"FTP REN    renames remote file",CR,LF
+		db	"FTP MD     makes remote directory",CR,LF
 		db	"FTP RD     removes remote directory",CR,LF
 		db	CR,LF
-		db	"After using :FTP LOGIN the EXOS "
-		db	"FTP: device can be used,",CR,LF
-		db	"eg. LOAD \"ftp:test.bas\"",CR,LF 
+		db	"After using :FTP LOGIN the EXOS FTP: "
+		db	"device can be used",CR,LF
+		db	"eg. :FTP LOGIN 192.168.1.1",CR,LF
+		db	"    LOAD \"ftp:demo.bas\"",CR,LF 
 		db	0
 ;
-ping_help_str	db	"NET PING <ip|url> tests communication "
+ping_help_str	db	"NET PING <host> tests communication "
 		db	"with other computers on the network",CR,LF
+		db	"eg. :NET PING 192.168.1.1",CR,LF
 		db	0
 ;
-trace_help_str	db	"NET TRACE ON|RAW|OFF sets diagnostic "
+trace_help_str	db	"NET TRACE [ON|RAW|OFF] sets diagnostic "
 		db	"network trace options:",CR,LF
 		db	CR,LF
-		db	"NET TRACE ON  Traces protocols",CR,LF
+		db	"NET TRACE     Turns tracing on",CR,LF
 		db	"NET TRACE RAW As ON but also raw bytes",CR,LF
 		db	"NET TRACE OFF Turns off all tracing",CR,LF
 		db	0
 ;
-status_help_str:db	"NET STATUS shows current IP address etc.",CR,LF
+status_help_str:db	"NET STATUS shows MAC and IP addresses "
+		db	"and status of all sockets",CR,LF
 		db	0
 ;
 time_help_str:	db	"NET TIME updates the system time and "
@@ -911,6 +984,8 @@ trace_str:	db	5,"TRACE"
 status_str:	db	6,"STATUS"
 time_str:	db	4,"TIME"
 help_str:	db	4,"HELP"
+;
+special_str:	db	6,"EPNET",0ffh
 ;
 ;
 ;
